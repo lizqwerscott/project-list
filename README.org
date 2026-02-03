@@ -9,7 +9,6 @@ Project List is an Emacs package that provides a convenient interface to browse 
 - Navigate projects with keyboard shortcuts
 - Open projects in Dired or switch to them directly
 - Forget projects you no longer need
-- Refresh the project list on demand
 
 ** Installation
 
