@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.4"))
 ;; Keywords: tools
-;; URL: https://github.com/lizqwerscott/project-list.el
+;; URL: https://github.com/lizqwerscott/project-list
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
