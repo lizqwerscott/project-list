@@ -47,8 +47,21 @@
     (define-key map (kbd "A") 'project-list-add-project)
     (define-key map (kbd "n") 'project-list-forward-line)
     (define-key map (kbd "p") 'project-list-backward-line)
+    (define-key map (kbd "/ /") 'project-list-clear-filter)
+    (define-key map (kbd "/ t") 'project-list-by-used-type)
+    (define-key map (kbd "/ n") 'project-list-by-used-name)
+    (define-key map (kbd "/ p") 'project-list-by-used-path)
     map)
   "Keymap for `project-list-mode'.")
+
+(defvar project-list-filter-type nil
+  "Filter projects by type (regexp).")
+
+(defvar project-list-filter-name nil
+  "Filter projects by name (regexp).")
+
+(defvar project-list-filter-path nil
+  "Filter projects by path (regexp).")
 
 (define-derived-mode project-list-mode special-mode "Project List"
   "Major mode for listing known projects.
@@ -72,7 +85,27 @@
 (defun project-list-insert-projects ()
   "Insert all known projects into the buffer."
   (let ((projects (project-known-project-roots))
-        (first-line-point nil))
+        (first-line-point nil)
+        (filtered-count 0)
+        (total-count 0))
+    ;; Set header-line with filter info
+    (let ((header-line ""))
+      (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
+        (let ((filter-info "Filter: "))
+          (when project-list-filter-type
+            (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
+          (when project-list-filter-name
+            (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
+          (when project-list-filter-path
+            (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
+          (setq header-line (string-trim filter-info))))
+
+      (setq header-line
+            (unless (string-empty-p header-line)
+              (concat header-line (format " (Showing %d/%d projects)" filtered-count total-count))))
+
+      (setq header-line-format header-line))
+
     (if (null projects)
         (insert "No known projects.\n")
       (insert (propertize (format "%-8s %-30s %s\n" "Type" "Name" "Path")
@@ -97,13 +130,45 @@
                            (t 'font-lock-type-face)))
                (name-face (if (file-directory-p project-root)
                               'font-lock-function-name-face
-                            'shadow)))
-          (insert (propertize (format "%-8s " type) 'face type-face))
-          (insert (propertize (format "%-30s " name) 'face name-face))
-          (insert (propertize project-root
-                              'face 'project-list-project-root-face
-                              'project-root-path project-root)
-                  "\n"))))
+                            'shadow))
+               (include t))
+          (setq total-count (1+ total-count))
+          ;; Apply filters
+          (when project-list-filter-type
+            (unless (string-match-p project-list-filter-type type)
+              (setq include nil)))
+          (when project-list-filter-name
+            (unless (string-match-p project-list-filter-name name)
+              (setq include nil)))
+          (when project-list-filter-path
+            (unless (string-match-p project-list-filter-path project-root)
+              (setq include nil)))
+          (when include
+            (setq filtered-count (1+ filtered-count))
+            (insert (propertize (format "%-8s " type) 'face type-face))
+            (insert (propertize (format "%-30s " name) 'face name-face))
+            (insert (propertize project-root
+                                'face 'project-list-project-root-face
+                                'project-root-path project-root)
+                    "\n")))))
+
+    ;; Update header-line with actual counts
+    (let ((header-line ""))
+      (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
+        (let ((filter-info "Filter: "))
+          (when project-list-filter-type
+            (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
+          (when project-list-filter-name
+            (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
+          (when project-list-filter-path
+            (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
+          (setq header-line (string-trim filter-info))))
+
+      (setq header-line
+            (unless (string-empty-p header-line)
+              (concat header-line (format " (Showing %d/%d projects)" filtered-count total-count))))
+
+      (setq header-line-format header-line))
     (goto-char first-line-point)))
 
 (defun project-list-open-project ()
@@ -180,6 +245,41 @@ over header lines."
 	    (goto-char (point-min)))
       (decf arg)
       (project-list-skip-properties '(project-list-title) 1))))
+
+(defun project-list-clear-filter ()
+  "Clear all filters and refresh the project list."
+  (interactive)
+  (setq project-list-filter-type nil)
+  (setq project-list-filter-name nil)
+  (setq project-list-filter-path nil)
+  (project-list-refresh))
+
+(defun project-list-by-used-type (regexp)
+  "Filter projects by project type using a regular expression.
+
+REGEXP is a regular expression string used to match project types."
+  (interactive (list (read-string "Filter by type (regexp, empty to clear): " project-list-filter-type)))
+  (project-list-clear-filter)
+  (setq project-list-filter-type regexp)
+  (project-list-refresh))
+
+(defun project-list-by-used-name (regexp)
+  "Filter projects by project name using a regular expression.
+
+REGEXP is a regular expression string used to match project names."
+  (interactive (list (read-string "Filter by name (regexp, empty to clear): " project-list-filter-name)))
+  (project-list-clear-filter)
+  (setq project-list-filter-name regexp)
+  (project-list-refresh))
+
+(defun project-list-by-used-path (regexp)
+  "Filter projects by project path using a regular expression.
+
+REGEXP is a regular expression string used to match project root paths."
+  (interactive (list (read-string "Filter by path (regexp, empty to clear): " project-list-filter-path)))
+  (project-list-clear-filter)
+  (setq project-list-filter-path regexp)
+  (project-list-refresh))
 
 ;;;###autoload
 (defun project-list-projects ()
