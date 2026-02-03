@@ -1,0 +1,52 @@
+* Project List for Emacs
+
+Project List is an Emacs package that provides a convenient interface to browse and manage your known projects.
+
+** Features
+
+- Display all known projects in a formatted list
+- Show project type (VC, Transient, Unknown) with color coding
+- Navigate projects with keyboard shortcuts
+- Open projects in Dired or switch to them directly
+- Forget projects you no longer need
+- Refresh the project list on demand
+
+** Installation
+
+*** Manual Installation
+
+1. Download `project-list.el` to your Emacs load path
+2. Add to your init file:
+
+#+BEGIN_SRC emacs-lisp
+(require 'project-list)
+#+END_SRC
+
+*** Using package.el
+
+If you've published this package to MELPA or similar, you can install it with:
+
+#+BEGIN_SRC emacs-lisp
+(use-package project-list
+  :ensure t)
+#+END_SRC
+
+** Usage
+
+*** Basic Commands
+
+- ~M-x project-list-projects~ - Open the project list buffer
+
+*** Keybindings in Project List Buffer
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| =RET= | ~project-list-visit-project~ | Switch to the project at point |
+| =g= | ~project-list-refresh~ | Refresh the project list |
+| =q= | ~quit-window~ | Quit the project list buffer |
+| =o= | ~project-list-open-project~ | Open project in Dired |
+| =k= | ~project-list-forget-project~ | Forget the project at point |
+| =A= | ~project-list-add-project~ | Add a new project |
+| =n= | ~project-list-forward-line~ | Move to next line |
+| =p= | ~project-list-backward-line~ | Move to previous line |
+
