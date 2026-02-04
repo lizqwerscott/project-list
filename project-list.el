@@ -29,7 +29,11 @@
 
 (require 'project)
 
-(defface project-list-marked-face '((t :inherit warning))
+(defface project-list-marked-face '((t :inherit ibuffer-marked))
+  "Face used for displaying marked buffers."
+  :group 'project-list)
+
+(defface project-list-marked-delete-face '((t :inherit ibuffer-deletion))
   "Face used for displaying marked buffers."
   :group 'project-list)
 
@@ -51,6 +55,13 @@
     (define-key map (kbd "/ t") 'project-list-by-used-type)
     (define-key map (kbd "/ n") 'project-list-by-used-name)
     (define-key map (kbd "/ p") 'project-list-by-used-path)
+
+    (define-key map (kbd "m") 'project-list-mark-forward)
+    (define-key map (kbd "u") 'project-list-unmark-forward)
+
+    (define-key map (kbd "d") 'project-list-mark-for-delete)
+    (define-key map (kbd "x") 'project-list-do-kill-on-deletion-marks)
+
     map)
   "Keymap for `project-list-mode'.")
 
@@ -82,6 +93,107 @@
     (erase-buffer)
     (project-list-insert-projects)))
 
+(defun project-list-project-info (project-root)
+  "Get information about a project at PROJECT-ROOT.
+
+PROJECT-ROOT is the root directory of the project.
+Return a list (PROJECT TYPE NAME ROOT) where:
+- PROJECT is the project object from `project--find-in-directory'
+- TYPE is a string describing the project type
+- NAME is the base name of the project directory
+- ROOT is the project root path"
+  (let* ((pr (if (file-remote-p project-root) '(remote)
+               (project--find-in-directory project-root)))
+         (type (cond
+                ((null pr) "Unknown")
+                ((eq (car pr) 'remote) "Remote")
+                ((eq (car pr) 'transient) "Transient")
+                (t (symbol-name (car pr)))))
+         (name (file-name-nondirectory (directory-file-name project-root))))
+    (list pr type name project-root)))
+
+(defun project-list--format-with-truncation (text width face &optional ellipsis)
+  "Format TEXT with FACE, truncating to WIDTH if needed.
+If TEXT is longer than WIDTH, truncate it and add ELLIPSIS (default \"...\").
+Returns a propertized string with face applied."
+  (let* ((ellipsis (or ellipsis "..."))
+         (text-len (length text))
+         (ellipsis-len (length ellipsis)))
+    (if (<= text-len width)
+        (concat (propertize text 'face face)
+                (make-string (- width text-len) ?\s)
+                " ")
+      (let* ((truncated-len (- width ellipsis-len))
+             (truncated-text (if (> truncated-len 0)
+                                 (substring text 0 truncated-len)
+                               "")))
+        (concat (propertize (concat truncated-text ellipsis) 'face face)
+                " ")))))
+
+(defun project-list-insert-buffer-line (mark project)
+  "Insert a line describing BUFFER and MARK for PROJECT."
+  (let ((beg (point)))
+    (pcase-let* ((`(,pr ,type ,name ,project-root) project)
+                 (type-face (cond
+                             ((null pr) 'error)
+                             ((eq (car pr) 'transient) 'warning)
+                             ((eq (car pr) 'vc) 'success)
+                             (t 'font-lock-type-face)))
+                 (name-face (cond ((eq mark ?\>) 'project-list-marked-face)
+                                  ((eq mark ?\d) 'project-list-marked-delete-face)
+                                  (t 'font-lock-function-name-face))))
+      (insert (project-list--format-with-truncation type 8 type-face))
+      (insert (project-list--format-with-truncation name 30 name-face))
+      (insert (propertize project-root
+                          'face 'project-list-project-root-face
+                          'project-root-path project-root))
+      (put-text-property beg (point) 'project-list-properties mark)
+      (insert "\n"))))
+
+(defun project-list-filter-includep (project)
+  "Check if PROJECT should be included based on current filters.
+
+PROJECT is a list (PROJECT TYPE NAME ROOT) as returned by
+`project-list-project-info'. Return non-nil if the project matches all active
+filters."
+  (pcase-let* ((`(,_ ,type ,name ,project-root) project)
+               (include t))
+    ;; Apply filters
+    (when project-list-filter-type
+      (unless (string-match-p project-list-filter-type type)
+        (setq include nil)))
+    (when project-list-filter-name
+      (unless (string-match-p project-list-filter-name name)
+        (setq include nil)))
+    (when project-list-filter-path
+      (unless (string-match-p project-list-filter-path project-root)
+        (setq include nil)))
+    include))
+
+(defun project-list-set-heade-line (filtered-count total-count)
+  "Set the header line for the project list buffer.
+
+  FILTERED-COUNT is the number of projects matching current filters.
+  TOTAL-COUNT is the total number of known projects.
+  Display filter information and project counts in the header line.
+  Note: Function name contains a typo (heade instead of header)."
+  (let ((header-line ""))
+    (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
+      (let ((filter-info "Filter: "))
+        (when project-list-filter-type
+          (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
+        (when project-list-filter-name
+          (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
+        (when project-list-filter-path
+          (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
+        (setq header-line (string-trim filter-info))))
+
+    (setq header-line
+          (unless (string-empty-p header-line)
+            (concat header-line (format " (Showing %d/%d projects)" filtered-count total-count))))
+
+    (setq header-line-format header-line)))
+
 (defun project-list-insert-projects ()
   "Insert all known projects into the buffer."
   (let ((projects (project-known-project-roots))
@@ -89,23 +201,7 @@
         (filtered-count 0)
         (total-count 0))
     ;; Set header-line with filter info
-    (let ((header-line ""))
-      (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
-        (let ((filter-info "Filter: "))
-          (when project-list-filter-type
-            (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
-          (when project-list-filter-name
-            (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
-          (when project-list-filter-path
-            (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
-          (setq header-line (string-trim filter-info))))
-
-      (setq header-line
-            (unless (string-empty-p header-line)
-              (concat header-line (format " (Showing %d/%d projects)" filtered-count total-count))))
-
-      (setq header-line-format header-line))
-
+    (project-list-set-heade-line filtered-count total-count)
     (if (null projects)
         (insert "No known projects.\n")
       (insert (propertize (format "%-8s %-30s %s\n" "Type" "Name" "Path")
@@ -117,58 +213,15 @@
       (insert "\n")
       (setq first-line-point (point))
       (dolist (project-root projects)
-        (let* ((pr (if (file-remote-p project-root) '(remote)
-                     (project--find-in-directory project-root)))
-               (type (cond
-                      ((null pr) "Unknown")
-                      ((eq (car pr) 'remote) "Remote")
-                      ((eq (car pr) 'transient) "Transient")
-                      (t (symbol-name (car pr)))))
-               (name (file-name-nondirectory (directory-file-name project-root)))
-               (type-face (cond
-                           ((null pr) 'error)
-                           ((eq (car pr) 'transient) 'warning)
-                           ((eq (car pr) 'vc) 'success)
-                           (t 'font-lock-type-face)))
-               (name-face 'font-lock-function-name-face)
-               (include t))
+        (let* ((project (project-list-project-info project-root)))
           (setq total-count (1+ total-count))
-          ;; Apply filters
-          (when project-list-filter-type
-            (unless (string-match-p project-list-filter-type type)
-              (setq include nil)))
-          (when project-list-filter-name
-            (unless (string-match-p project-list-filter-name name)
-              (setq include nil)))
-          (when project-list-filter-path
-            (unless (string-match-p project-list-filter-path project-root)
-              (setq include nil)))
-          (when include
+          (when (project-list-filter-includep project)
             (setq filtered-count (1+ filtered-count))
-            (insert (propertize (format "%-8s " type) 'face type-face))
-            (insert (propertize (format "%-30s " name) 'face name-face))
-            (insert (propertize project-root
-                                'face 'project-list-project-root-face
-                                'project-root-path project-root)
-                    "\n")))))
+            (project-list-insert-buffer-line ?\s project)))))
 
     ;; Update header-line with actual counts
-    (let ((header-line ""))
-      (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
-        (let ((filter-info "Filter: "))
-          (when project-list-filter-type
-            (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
-          (when project-list-filter-name
-            (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
-          (when project-list-filter-path
-            (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
-          (setq header-line (string-trim filter-info))))
+    (project-list-set-heade-line filtered-count total-count)
 
-      (setq header-line
-            (unless (string-empty-p header-line)
-              (concat header-line (format " (Showing %d/%d projects)" filtered-count total-count))))
-
-      (setq header-line-format header-line))
     (goto-char first-line-point)))
 
 (defun project-list-open-project ()
@@ -199,6 +252,7 @@
 
 (defun project-list-skip-properties (props direction)
   "Skip lines that have any of the text properties in PROPS at point.
+
 Move in DIRECTION (1 for forward, -1 for backward). This is a helper function
 used by `project-list-forward-line' and `project-list-backward-line' to skip
 over header lines."
@@ -280,6 +334,127 @@ REGEXP is a regular expression string used to match project root paths."
   (project-list-clear-filter)
   (setq project-list-filter-path regexp)
   (project-list-refresh))
+
+;; mark
+(defsubst project-list-current-mark ()
+  "Get current project mark."
+  (get-text-property (line-beginning-position)
+			         'project-list-properties))
+
+(defun project-list-redisplay-current ()
+  "Redisplay current project."
+  (when (eobp)
+    (forward-line -1))
+  (beginning-of-line)
+  (when-let* ((project-root (project-list-get-project-at-point))
+              (project (project-list-project-info project-root))
+              (mark (project-list-current-mark)))
+    (save-excursion
+	  (delete-region (point) (1+ (line-end-position)))
+      (project-list-insert-buffer-line mark project))))
+
+(defun project-list-set-mark-1 (mark)
+  "Set MARK in current project."
+  (let ((beg (line-beginning-position))
+	    (end (line-end-position)))
+    (put-text-property beg end 'project-list-properties mark)))
+
+(defun project-list-set-mark (mark)
+  "Set MARK in current project."
+  (let ((inhibit-read-only t))
+    (project-list-set-mark-1 mark)
+    (project-list-redisplay-current)
+    (beginning-of-line)))
+
+(defun project-list-mark-interactive (arg mark &optional movement)
+  "Mark or unmark ARG projects starting from current line.
+
+  ARG is the number of projects to mark (positive) or unmark (negative). MARK is
+the character to set (?\> for marked, ?\s for unmarked). MOVEMENT is a
+deprecated argument for backward compatibility."
+  (or arg (setq arg 1))
+  ;; deprecated movement argument
+  (when (and movement (< movement 0))
+    (setq arg (- arg)))
+  (project-list-forward-line 0)
+
+  (project-list-forward-line 0)
+  (while (> arg 0)
+    (project-list-set-mark mark)
+    (project-list-forward-line 1)
+    (setq arg (1- arg)))
+  (while (< arg 0)
+    (project-list-forward-line -1)
+    (project-list-set-mark mark)
+    (setq arg (1+ arg))))
+
+(defun project-list--mark-region-or-n-with-char (start end arg mark-char)
+  "Mark projects in region or ARG projects with MARK-CHAR.
+
+  If region is active (between START and END), mark all projects in the region.
+Otherwise, mark ARG projects from current position. MARK-CHAR is the character
+to set as mark."
+  (if (use-region-p)
+      (let ((cur (point)) (line-count (count-lines start end)))
+        (goto-char start)
+        (project-list-mark-interactive line-count mark-char)
+        (goto-char cur))
+    (project-list-mark-interactive arg mark-char)))
+
+(defsubst project-list--get-region-and-prefix ()
+  "Get region boundaries and prefix argument for marking commands.
+
+  Return a list (START END ARG) where: - START and END are region boundaries if
+region is active, otherwise nil - ARG is the numeric value of the prefix
+argument"
+  (let ((arg (prefix-numeric-value current-prefix-arg)))
+    (if (use-region-p) (list (region-beginning) (region-end) arg)
+      (list nil nil arg))))
+
+(defun project-list-mark-forward (start end arg)
+  "Mark the project in the region, or ARG projects.
+START and END is selected regoin."
+  (interactive (project-list--get-region-and-prefix))
+  (project-list--mark-region-or-n-with-char start end arg ?\>))
+
+(defun project-list-unmark-forward (start end arg)
+  "Unmark the projects in the region, or ARG buffers.
+START and END is selected regoin."
+  (interactive (project-list--get-region-and-prefix))
+  (project-list--mark-region-or-n-with-char start end arg ?\s))
+
+(defun project-list-mark-for-delete (start end arg)
+  "Mark the projects in the region to delete, or ARG buffers.
+START and END is selected regoin."
+  (interactive (project-list--get-region-and-prefix))
+  (project-list--mark-region-or-n-with-char start end arg ?\d))
+
+(defun project-list-do-kill-on-deletion-marks ()
+  "Forget projects marked for deletion.
+
+If no projects are marked, mark the current project for deletion and then forget
+it. Ask for confirmation before forgetting any projects. This command operates
+on the projects displayed in the current `project-list-mode' buffer."
+  (interactive)
+  (let ((deletion-project))
+    (save-excursion
+      (goto-char (point-min))
+      (project-list-skip-properties '(project-list-title) 1)
+      (while (not (eobp))
+        (let ((mark (project-list-current-mark)))
+          (when (eq mark ?\d)
+            (push (project-list-get-project-at-point) deletion-project)))
+        (forward-line)))
+    (unless deletion-project
+      (project-list-mark-for-delete nil nil 1)
+      (project-list-backward-line 1)
+      (push (project-list-get-project-at-point) deletion-project))
+    (when (and deletion-project
+               (yes-or-no-p "Is really forget this projects?"))
+      (dolist (project deletion-project)
+        (project-forget-project project)
+        (project-list-refresh)))))
+
 
 ;;;###autoload
 (defun project-list-projects ()
