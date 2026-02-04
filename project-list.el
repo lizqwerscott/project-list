@@ -117,9 +117,11 @@
       (insert "\n")
       (setq first-line-point (point))
       (dolist (project-root projects)
-        (let* ((pr (project--find-in-directory project-root))
+        (let* ((pr (if (file-remote-p project-root) '(remote)
+                     (project--find-in-directory project-root)))
                (type (cond
                       ((null pr) "Unknown")
+                      ((eq (car pr) 'remote) "Remote")
                       ((eq (car pr) 'transient) "Transient")
                       (t (symbol-name (car pr)))))
                (name (file-name-nondirectory (directory-file-name project-root)))
@@ -128,9 +130,7 @@
                            ((eq (car pr) 'transient) 'warning)
                            ((eq (car pr) 'vc) 'success)
                            (t 'font-lock-type-face)))
-               (name-face (if (file-directory-p project-root)
-                              'font-lock-function-name-face
-                            'shadow))
+               (name-face 'font-lock-function-name-face)
                (include t))
           (setq total-count (1+ total-count))
           ;; Apply filters
