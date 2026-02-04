@@ -54,7 +54,8 @@
     (define-key map (kbd "/ /") 'project-list-clear-filter)
     (define-key map (kbd "/ t") 'project-list-by-used-type)
     (define-key map (kbd "/ n") 'project-list-by-used-name)
-    (define-key map (kbd "/ p") 'project-list-by-used-path)
+    (define-key map (kbd "/ r") 'project-list-by-used-root)
+    (define-key map (kbd "/ p") 'project-list-pop-filter)
 
     (define-key map (kbd "m") 'project-list-mark-forward)
     (define-key map (kbd "u") 'project-list-unmark-forward)
@@ -65,14 +66,8 @@
     map)
   "Keymap for `project-list-mode'.")
 
-(defvar project-list-filter-type nil
-  "Filter projects by type (regexp).")
-
-(defvar project-list-filter-name nil
-  "Filter projects by name (regexp).")
-
-(defvar project-list-filter-path nil
-  "Filter projects by path (regexp).")
+(defvar-local project-list-filter-list nil
+  "Filter projects list.")
 
 (define-derived-mode project-list-mode special-mode "Project List"
   "Major mode for listing known projects.
@@ -110,7 +105,7 @@ Return a list (PROJECT TYPE NAME ROOT) where:
                 ((eq (car pr) 'transient) "Transient")
                 (t (symbol-name (car pr)))))
          (name (file-name-nondirectory (directory-file-name project-root))))
-    (list pr type name project-root)))
+    (list pr :type type :name name :project-root project-root)))
 
 (defun project-list--format-with-truncation (text width face &optional ellipsis)
   "Format TEXT with FACE, truncating to WIDTH if needed.
@@ -133,7 +128,7 @@ Returns a propertized string with face applied."
 (defun project-list-insert-buffer-line (mark project)
   "Insert a line describing BUFFER and MARK for PROJECT."
   (let ((beg (point)))
-    (pcase-let* ((`(,pr ,type ,name ,project-root) project)
+    (pcase-let* ((`(,pr . (:type ,type :name ,name :project-root ,project-root)) project)
                  (type-face (cond
                              ((null pr) 'error)
                              ((eq (car pr) 'transient) 'warning)
@@ -156,18 +151,13 @@ Returns a propertized string with face applied."
 PROJECT is a list (PROJECT TYPE NAME ROOT) as returned by
 `project-list-project-info'. Return non-nil if the project matches all active
 filters."
-  (pcase-let* ((`(,_ ,type ,name ,project-root) project)
+  (pcase-let* ((`(,_ . ,lines) project)
                (include t))
     ;; Apply filters
-    (when project-list-filter-type
-      (unless (string-match-p project-list-filter-type type)
-        (setq include nil)))
-    (when project-list-filter-name
-      (unless (string-match-p project-list-filter-name name)
-        (setq include nil)))
-    (when project-list-filter-path
-      (unless (string-match-p project-list-filter-path project-root)
-        (setq include nil)))
+    (dolist (filter project-list-filter-list)
+      (let ((data (plist-get lines (car filter))))
+        (unless (string-match-p (cdr filter) data)
+          (setq include nil))))
     include))
 
 (defun project-list-set-heade-line (filtered-count total-count)
@@ -178,14 +168,14 @@ filters."
   Display filter information and project counts in the header line.
   Note: Function name contains a typo (heade instead of header)."
   (let ((header-line ""))
-    (when (or project-list-filter-type project-list-filter-name project-list-filter-path)
+    (when project-list-filter-list
       (let ((filter-info "Filter: "))
-        (when project-list-filter-type
-          (setq filter-info (concat filter-info "type=" project-list-filter-type " ")))
-        (when project-list-filter-name
-          (setq filter-info (concat filter-info "name=" project-list-filter-name " ")))
-        (when project-list-filter-path
-          (setq filter-info (concat filter-info "path=" project-list-filter-path " ")))
+        (dolist (filter project-list-filter-list)
+          (setq filter-info
+                (concat filter-info
+                        (format "[%s: %s] "
+                                (intern (substring (symbol-name (car filter)) 1))
+                                (cdr filter)))))
         (setq header-line (string-trim filter-info))))
 
     (setq header-line
@@ -300,39 +290,42 @@ over header lines."
       (decf arg)
       (project-list-skip-properties '(project-list-title) 1))))
 
+(defun project-list-pop-filter ()
+  "Pop filter."
+  (interactive)
+  (when (null project-list-filter-list)
+    (error "No filters in effect"))
+  (pop project-list-filter-list)
+  (project-list-refresh))
+
 (defun project-list-clear-filter ()
   "Clear all filters and refresh the project list."
   (interactive)
-  (setq project-list-filter-type nil)
-  (setq project-list-filter-name nil)
-  (setq project-list-filter-path nil)
+  (setq project-list-filter-list nil)
   (project-list-refresh))
 
 (defun project-list-by-used-type (regexp)
   "Filter projects by project type using a regular expression.
 
 REGEXP is a regular expression string used to match project types."
-  (interactive (list (read-string "Filter by type (regexp, empty to clear): " project-list-filter-type)))
-  (project-list-clear-filter)
-  (setq project-list-filter-type regexp)
+  (interactive (list (read-string "Filter by type (regexp): ")))
+  (push (cons :type regexp) project-list-filter-list)
   (project-list-refresh))
 
 (defun project-list-by-used-name (regexp)
   "Filter projects by project name using a regular expression.
 
 REGEXP is a regular expression string used to match project names."
-  (interactive (list (read-string "Filter by name (regexp, empty to clear): " project-list-filter-name)))
-  (project-list-clear-filter)
-  (setq project-list-filter-name regexp)
+  (interactive (list (read-string "Filter by name (regexp): ")))
+  (push (cons :name regexp) project-list-filter-list)
   (project-list-refresh))
 
-(defun project-list-by-used-path (regexp)
+(defun project-list-by-used-root (regexp)
   "Filter projects by project path using a regular expression.
 
 REGEXP is a regular expression string used to match project root paths."
-  (interactive (list (read-string "Filter by path (regexp, empty to clear): " project-list-filter-path)))
-  (project-list-clear-filter)
-  (setq project-list-filter-path regexp)
+  (interactive (list (read-string "Filter by project root (regexp): ")))
+  (push (cons :project-root regexp) project-list-filter-list)
   (project-list-refresh))
 
 ;; mark
